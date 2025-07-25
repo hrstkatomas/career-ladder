@@ -9,6 +9,7 @@ A comprehensive career progression tracking system built with Next.js and Fireba
 - [Data Model](#data-model)
 - [Architecture](#architecture)
 - [Firebase Setup](#firebase-setup)
+- [First User Setup](#first-user-setup)
 - [Next.js Configuration](#nextjs-configuration)
 - [Implementation Guide](#implementation-guide)
 - [Security Considerations](#security-considerations)
@@ -22,9 +23,10 @@ The Career Ladder app provides a structured approach to career development with:
 
 - **7 standardized career levels** (L1-L7) with clear expectations
 - **Three skill categories**: Generic Engineering, Domain-Specific, and Team-Specific
-- **Self-assessment system** with progression tracking
-- **Administrative interface** for team leaders
+- **Team leader assessment system** with employee progress tracking
+- **Administrative interface** for team leaders and admins
 - **Role-based access control** and secure data management
+- **Automatic level progression** based on skill achievements
 
 ## Core Concepts
 
@@ -42,7 +44,7 @@ The Career Ladder app provides a structured approach to career development with:
 
 ### Skill Categories
 
-1. **Generic Engineering Skills**: Shared across all roles (e.g., problem-solving, communication, code quality)
+1. **Generic Engineering Skills**: Shared across all roles and teams (e.g., problem-solving, communication, code quality)
 2. **Domain-Specific Skills**: Role-specific expertise (e.g., frontend, backend, DevOps, system administration)
 3. **Team-Specific Skills**: Technologies and practices unique to each team
 
@@ -52,6 +54,28 @@ The Career Ladder app provides a structured approach to career development with:
 - **Learning**: Currently learning the skill
 - **Proficient**: Can apply independently in some situations
 - **Fluent**: Uses autonomously in all situations
+
+### Role-Based System
+
+- **Employees**: Can view their skills and progression (read-only)
+- **Team Leaders**: Can assess team members' skills and configure team-specific requirements
+- **Admins**: Can manage all users, create generic/domain skills, and assign roles
+
+### Automatic Progression
+
+Career level advancement is **automatic** and **immediate** based on skill achievements:
+
+- **Progression Requirement**: All required skills for the target level (including all previous levels) must be assessed as "Fluent"
+- **Skill Waivers**: Team leaders can waive individual skills at their discretion for exceptional cases
+- **Immediate Updates**: Level progression happens instantly when requirements are met, using Firestore triggers
+- **No Time Requirements**: There are no minimum time requirements between levels
+
+### Assessment Workflow
+
+- **Team Leader Responsibility**: Team leaders assess their team members' skills (employees have read-only access)
+- **Partial Assessments**: Team leaders can assess skills incrementally; unassessed skills default to "None"
+- **Assessment Frequency**: Flexible schedule, typically monthly or quarterly updates
+- **Default State**: All skills start as "None" until actively assessed
 
 ## Data Model
 
@@ -76,7 +100,7 @@ interface Team {
   id: string;
   name: string;
   leaderId: string;
-  domain: string;
+  domains: string[]; // teams can have members from multiple domains
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }
@@ -100,8 +124,20 @@ interface Assessment {
   userId: string;
   skillId: string;
   level: "none" | "learning" | "proficient" | "fluent";
-  selfAssessedAt: Timestamp;
+  assessedBy: string; // team leader's user ID
+  assessedAt: Timestamp;
   notes?: string;
+}
+
+// Skill Waivers Collection
+interface SkillWaiver {
+  id: string;
+  userId: string;
+  skillId: string;
+  level: number; // the level this waiver applies to
+  waivedBy: string; // team leader's user ID
+  reason: string;
+  waivedAt: Timestamp;
 }
 
 // Ladder Configurations Collection
@@ -111,13 +147,21 @@ interface LadderConfig {
   domain: string;
   skillsByLevel: {
     [level: number]: {
-      genericSkills: string[]; // skill IDs
-      domainSkills: string[]; // skill IDs
-      teamSkills: string[]; // skill IDs
+      genericSkills: string[]; // skill IDs - same across all teams
+      domainSkills: string[]; // skill IDs - predefined per domain
+      teamSkills: string[]; // skill IDs - team-specific selections
     };
   };
   createdAt: Timestamp;
   updatedAt: Timestamp;
+}
+
+// Domains Collection (predefined by admins)
+interface Domain {
+  id: string;
+  name: string; // e.g., 'Frontend', 'Backend', 'DevOps'
+  description: string;
+  createdAt: Timestamp;
 }
 ```
 
@@ -186,8 +230,8 @@ src/
 ```bash
 # In Firebase Console:
 # 1. Go to Authentication > Sign-in method
-# 2. Enable "Email/Password"
-# 3. Enable "Google" (recommended for corporate environments)
+# 2. Enable "Google" sign-in provider
+# 3. Add your domain to authorized domains if needed
 ```
 
 ### 3. Create Firestore Database
@@ -233,10 +277,186 @@ NEXT_PUBLIC_FIREBASE_APP_ID=1:123456789:web:abcdef
 FIREBASE_PROJECT_ID=your_project_id
 FIREBASE_CLIENT_EMAIL=firebase-adminsdk-xxxxx@your_project.iam.gserviceaccount.com
 FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nYour_Private_Key_Here\n-----END PRIVATE KEY-----"
+```
 
-# Application
-NEXTAUTH_URL=http://localhost:3000
-NEXTAUTH_SECRET=your_nextauth_secret
+## First User Setup
+
+### Promoting Your First User to Admin
+
+Since the first user needs to be promoted to admin manually, follow these steps after your first user signs in with Google OAuth:
+
+#### Step 1: Sign in to your app
+
+1. Deploy your app or run it locally
+2. Sign in with your Google account
+3. Note your email address
+
+#### Step 2: Access Firebase Console
+
+1. Go to [Firebase Console](https://console.firebase.google.com/)
+2. Select your project
+3. Navigate to **Firestore Database**
+
+#### Step 3: Find your user document
+
+1. Click on the `users` collection
+2. Find the document with your email address
+3. Click on the document to edit it
+
+#### Step 4: Update the role field
+
+1. Look for the `role` field (it should be `employee` by default)
+2. Click the edit icon next to the role field
+3. Change the value from `employee` to `admin`
+4. Click **Update**
+
+#### Step 5: Verify admin access
+
+1. Refresh your app
+2. You should now have access to admin features
+3. You can now promote other users to `team_leader` or `admin` through the admin interface
+
+### Creating Initial Data
+
+The system needs some seed data to function. Here's the recommended initial setup:
+
+#### Generic Engineering Skills (same for all teams)
+
+```typescript
+const genericSkills = [
+  {
+    name: "Problem Solving",
+    description:
+      "Ability to analyze complex problems and develop effective solutions",
+    category: "generic",
+    applicableLevels: [1, 2, 3, 4, 5, 6, 7],
+  },
+  {
+    name: "Communication",
+    description:
+      "Clear written and verbal communication with team members and stakeholders",
+    category: "generic",
+    applicableLevels: [1, 2, 3, 4, 5, 6, 7],
+  },
+  {
+    name: "Code Quality",
+    description: "Writing clean, maintainable, and well-documented code",
+    category: "generic",
+    applicableLevels: [1, 2, 3, 4, 5, 6, 7],
+  },
+  {
+    name: "Testing",
+    description: "Writing and maintaining automated tests",
+    category: "generic",
+    applicableLevels: [2, 3, 4, 5, 6, 7],
+  },
+  {
+    name: "System Design",
+    description: "Designing scalable and maintainable software architectures",
+    category: "generic",
+    applicableLevels: [4, 5, 6, 7],
+  },
+  {
+    name: "Mentoring",
+    description: "Guiding and developing junior team members",
+    category: "generic",
+    applicableLevels: [3, 4, 5, 6, 7],
+  },
+  {
+    name: "Technical Leadership",
+    description:
+      "Leading technical decisions and driving architectural changes",
+    category: "generic",
+    applicableLevels: [5, 6, 7],
+  },
+];
+```
+
+#### Domain-Specific Skills Examples
+
+```typescript
+// Frontend Domain
+const frontendSkills = [
+  {
+    name: "React/Vue.js",
+    description: "Proficiency in modern frontend frameworks",
+    category: "domain",
+    domain: "frontend",
+    applicableLevels: [1, 2, 3, 4, 5, 6, 7],
+  },
+  {
+    name: "CSS/Styling",
+    description: "Advanced CSS, preprocessors, and styling methodologies",
+    category: "domain",
+    domain: "frontend",
+    applicableLevels: [1, 2, 3, 4, 5, 6, 7],
+  },
+  {
+    name: "Performance Optimization",
+    description: "Frontend performance analysis and optimization techniques",
+    category: "domain",
+    domain: "frontend",
+    applicableLevels: [3, 4, 5, 6, 7],
+  },
+];
+
+// Backend Domain
+const backendSkills = [
+  {
+    name: "API Design",
+    description: "Designing RESTful APIs and GraphQL schemas",
+    category: "domain",
+    domain: "backend",
+    applicableLevels: [2, 3, 4, 5, 6, 7],
+  },
+  {
+    name: "Database Design",
+    description: "Relational and NoSQL database design and optimization",
+    category: "domain",
+    domain: "backend",
+    applicableLevels: [2, 3, 4, 5, 6, 7],
+  },
+  {
+    name: "Microservices",
+    description: "Designing and implementing microservice architectures",
+    category: "domain",
+    domain: "backend",
+    applicableLevels: [4, 5, 6, 7],
+  },
+];
+```
+
+#### Predefined Domains
+
+```typescript
+const domains = [
+  {
+    name: "Frontend",
+    description: "User interface and user experience development",
+  },
+  {
+    name: "Backend",
+    description: "Server-side development and API design",
+  },
+  {
+    name: "DevOps",
+    description: "Infrastructure, deployment, and operational excellence",
+  },
+  {
+    name: "Mobile",
+    description: "iOS and Android application development",
+  },
+  {
+    name: "Data Engineering",
+    description:
+      "Data pipelines, analytics, and machine learning infrastructure",
+  },
+  {
+    name: "QA Engineering",
+    description:
+      "Quality assurance, testing automation, and release management",
+  },
+];
 ```
 
 ## Next.js Configuration
@@ -245,7 +465,6 @@ NEXTAUTH_SECRET=your_nextauth_secret
 
 ```bash
 npm install firebase firebase-admin
-npm install @next/auth next-auth
 npm install @headlessui/react @heroicons/react
 npm install tailwindcss @tailwindcss/forms
 npm install react-hook-form zod @hookform/resolvers
@@ -309,7 +528,8 @@ service cloud.firestore {
       allow read: if request.auth != null && request.auth.uid == userId;
       allow update: if request.auth != null && request.auth.uid == userId
         && !('role' in request.resource.data.diff(resource.data))
-        && !('teamId' in request.resource.data.diff(resource.data));
+        && !('teamId' in request.resource.data.diff(resource.data))
+        && !('currentLevel' in request.resource.data.diff(resource.data));
     }
 
     // Team leaders can read their team members
@@ -319,34 +539,90 @@ service cloud.firestore {
         get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.leaderId == request.auth.uid;
     }
 
-    // Teams - leaders can manage their own team
-    match /teams/{teamId} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null &&
-        (resource == null || resource.data.leaderId == request.auth.uid);
+    // Admins can read and update all users
+    match /users/{userId} {
+      allow read, write: if request.auth != null &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
     }
 
-    // Skills - team leaders can manage skills for their domain/team
+    // Teams - leaders can manage their own team, admins can manage all
+    match /teams/{teamId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && (
+        (resource == null || resource.data.leaderId == request.auth.uid) ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
+      );
+    }
+
+    // Skills - admins and team leaders can manage appropriate skills
     match /skills/{skillId} {
       allow read: if request.auth != null;
       allow write: if request.auth != null &&
-        (request.resource.data.category == 'team' &&
-         exists(/databases/$(database)/documents/teams/$(request.resource.data.teamId)) &&
-         get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.leaderId == request.auth.uid);
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && (
+          // Admins can manage all skills
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          // Team leaders can manage team-specific skills for their team
+          (request.resource.data.category == 'team' &&
+           exists(/databases/$(database)/documents/teams/$(request.resource.data.teamId)) &&
+           get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.leaderId == request.auth.uid)
+        );
     }
 
-    // Assessments - users can only manage their own assessments
+    // Assessments - team leaders can assess their team members
     match /assessments/{assessmentId} {
-      allow read, write: if request.auth != null &&
-        request.auth.uid == resource.data.userId;
+      allow read: if request.auth != null && (
+        // Users can read their own assessments
+        request.auth.uid == resource.data.userId ||
+        // Team leaders can read assessments for their team members
+        (exists(/databases/$(database)/documents/users/$(resource.data.userId)) &&
+         exists(/databases/$(database)/documents/teams/$(get(/databases/$(database)/documents/users/$(resource.data.userId)).data.teamId)) &&
+         get(/databases/$(database)/documents/teams/$(get(/databases/$(database)/documents/users/$(resource.data.userId)).data.teamId)).data.leaderId == request.auth.uid)
+      );
+
+      allow write: if request.auth != null &&
+        // Only team leaders can write assessments for their team members
+        exists(/databases/$(database)/documents/users/$(request.resource.data.userId)) &&
+        exists(/databases/$(database)/documents/teams/$(get(/databases/$(database)/documents/users/$(request.resource.data.userId)).data.teamId)) &&
+        get(/databases/$(database)/documents/teams/$(get(/databases/$(database)/documents/users/$(request.resource.data.userId)).data.teamId)).data.leaderId == request.auth.uid;
     }
 
-    // Ladder configurations - team leaders only
-    match /ladderConfigs/{configId} {
+    // Skill Waivers - team leaders can waive skills for their team members
+    match /skillWaivers/{waiverId} {
+      allow read: if request.auth != null && (
+        // Users can read their own waivers
+        request.auth.uid == resource.data.userId ||
+        // Team leaders can read waivers for their team members
+        (exists(/databases/$(database)/documents/users/$(resource.data.userId)) &&
+         exists(/databases/$(database)/documents/teams/$(get(/databases/$(database)/documents/users/$(resource.data.userId)).data.teamId)) &&
+         get(/databases/$(database)/documents/teams/$(get(/databases/$(database)/documents/users/$(resource.data.userId)).data.teamId)).data.leaderId == request.auth.uid)
+      );
+
+      allow write: if request.auth != null &&
+        // Only team leaders can create/update waivers for their team members
+        exists(/databases/$(database)/documents/users/$(request.resource.data.userId)) &&
+        exists(/databases/$(database)/documents/teams/$(get(/databases/$(database)/documents/users/$(request.resource.data.userId)).data.teamId)) &&
+        get(/databases/$(database)/documents/teams/$(get(/databases/$(database)/documents/users/$(request.resource.data.userId)).data.teamId)).data.leaderId == request.auth.uid;
+    }
+
+    // Domains - read by all, write by admins only
+    match /domains/{domainId} {
       allow read: if request.auth != null;
       allow write: if request.auth != null &&
-        exists(/databases/$(database)/documents/teams/$(request.resource.data.teamId)) &&
-        get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.leaderId == request.auth.uid;
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // Ladder configurations - team leaders and admins
+    match /ladderConfigs/{configId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && (
+        (exists(/databases/$(database)/documents/teams/$(request.resource.data.teamId)) &&
+         get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.leaderId == request.auth.uid) ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
+      );
     }
   }
 }
@@ -938,19 +1214,139 @@ export default function AdminDashboard() {
 
 ### Firestore Best Practices
 
+#### Automatic Level Progression with Triggers
+
+The system uses **Firestore triggers** to automatically update user levels when skill requirements are met:
+
+```typescript
+// Firebase Functions - Level progression trigger
+import { onDocumentWritten } from "firebase-functions/v2/firestore";
+import { getFirestore } from "firebase-admin/firestore";
+
+export const checkLevelProgression = onDocumentWritten(
+  "assessments/{assessmentId}",
+  async (event) => {
+    const db = getFirestore();
+    const assessment = event.data?.after?.data();
+
+    if (!assessment) return;
+
+    const { userId } = assessment;
+
+    // Get user's current level and team configuration
+    const [userDoc, assessmentsSnapshot, waiversSnapshot] = await Promise.all([
+      db.doc(`users/${userId}`).get(),
+      db.collection("assessments").where("userId", "==", userId).get(),
+      db.collection("skillWaivers").where("userId", "==", userId).get(),
+    ]);
+
+    const user = userDoc.data();
+    if (!user) return;
+
+    // Get ladder configuration for user's team and domain
+    const ladderConfigDoc = await db
+      .collection("ladderConfigs")
+      .where("teamId", "==", user.teamId)
+      .where("domain", "==", user.domain)
+      .limit(1)
+      .get();
+
+    if (ladderConfigDoc.empty) return;
+
+    const ladderConfig = ladderConfigDoc.docs[0].data();
+    const nextLevel = user.currentLevel + 1;
+
+    if (nextLevel > 7) return; // Max level reached
+
+    // Check if user meets requirements for next level
+    const canAdvance = await checkLevelRequirements(
+      userId,
+      nextLevel,
+      ladderConfig,
+      assessmentsSnapshot,
+      waiversSnapshot
+    );
+
+    if (canAdvance) {
+      await userDoc.ref.update({
+        currentLevel: nextLevel,
+        updatedAt: new Date(),
+      });
+    }
+  }
+);
+
+async function checkLevelRequirements(
+  userId: string,
+  targetLevel: number,
+  ladderConfig: any,
+  assessments: any,
+  waivers: any
+): Promise<boolean> {
+  // Get all required skills for levels 1 through targetLevel
+  const requiredSkills = [];
+  for (let level = 1; level <= targetLevel; level++) {
+    const levelSkills = ladderConfig.skillsByLevel[level];
+    if (levelSkills) {
+      requiredSkills.push(
+        ...levelSkills.genericSkills,
+        ...levelSkills.domainSkills,
+        ...levelSkills.teamSkills
+      );
+    }
+  }
+
+  const assessmentMap = new Map();
+  assessments.docs.forEach((doc) => {
+    const data = doc.data();
+    assessmentMap.set(data.skillId, data.level);
+  });
+
+  const waiverSet = new Set();
+  waivers.docs.forEach((doc) => {
+    const data = doc.data();
+    if (data.level <= targetLevel) {
+      waiverSet.add(data.skillId);
+    }
+  });
+
+  // Check if all required skills are fluent or waived
+  for (const skillId of requiredSkills) {
+    if (waiverSet.has(skillId)) continue; // Skill is waived
+
+    const assessmentLevel = assessmentMap.get(skillId);
+    if (assessmentLevel !== "fluent") {
+      return false; // Skill not at fluent level
+    }
+  }
+
+  return true;
+}
+```
+
+#### Transaction Best Practices
+
 ```typescript
 // Use transactions for atomic operations
 import { runTransaction } from "firebase/firestore";
 
-const updateAssessmentWithValidation = async (
+const updateAssessmentWithLevelCheck = async (
   userId: string,
   skillId: string,
-  level: string
+  level: string,
+  assessedBy: string
 ) => {
   await runTransaction(db, async (transaction) => {
-    // Verify user owns this assessment
+    // Verify team leader can assess this user
     const userDoc = await transaction.get(doc(db, "users", userId));
     if (!userDoc.exists()) throw new Error("User not found");
+
+    const teamDoc = await transaction.get(
+      doc(db, "teams", userDoc.data().teamId)
+    );
+    if (!teamDoc.exists() || teamDoc.data().leaderId !== assessedBy) {
+      throw new Error("Unauthorized: Not team leader");
+    }
 
     // Update assessment
     const assessmentRef = doc(db, "assessments", `${userId}_${skillId}`);
@@ -958,15 +1354,48 @@ const updateAssessmentWithValidation = async (
       userId,
       skillId,
       level,
-      selfAssessedAt: new Date(),
+      assessedBy,
+      assessedAt: new Date(),
     });
   });
 };
 ```
 
+#### Error Handling for Skill Deletion
+
+```typescript
+// When deleting a skill, remove related assessments and waivers
+const deleteSkillWithCleanup = async (skillId: string) => {
+  const batch = writeBatch(db);
+
+  // Delete all assessments for this skill
+  const assessmentsSnapshot = await getDocs(
+    query(collection(db, "assessments"), where("skillId", "==", skillId))
+  );
+
+  assessmentsSnapshot.docs.forEach((doc) => {
+    batch.delete(doc.ref);
+  });
+
+  // Delete all waivers for this skill
+  const waiversSnapshot = await getDocs(
+    query(collection(db, "skillWaivers"), where("skillId", "==", skillId))
+  );
+
+  waiversSnapshot.docs.forEach((doc) => {
+    batch.delete(doc.ref);
+  });
+
+  // Delete the skill itself
+  batch.delete(doc(db, "skills", skillId));
+
+  await batch.commit();
+};
+```
+
 ## Deployment
 
-### Option 1: Vercel (Recommended)
+### Vercel Deployment
 
 ```bash
 # Install Vercel CLI
@@ -979,71 +1408,70 @@ vercel --prod
 # Project Settings > Environment Variables
 ```
 
-### Option 2: Firebase Hosting
-
-```bash
-# Install Firebase CLI
-npm install -g firebase-tools
-
-# Login and initialize
-firebase login
-firebase init hosting
-
-# Build and deploy
-npm run build
-firebase deploy
-```
-
 ### Environment Setup for Production
 
-1. **Update Firebase security rules** for production
-2. **Set up proper domain** in Firebase Authentication settings
-3. **Configure CORS** if needed for API calls
-4. **Set up monitoring** with Firebase Performance Monitoring
+1. **Configure environment variables in Vercel** dashboard under Project Settings > Environment Variables
+2. **Update Firebase security rules** for production
+3. **Set up proper domain** in Firebase Authentication settings
+4. **Configure CORS** if needed for API calls
+5. **Set up monitoring** with Firebase Performance Monitoring
 
 ## Usage Guide
 
 ### For Employees
 
-1. **Sign in** with your company email
-2. **View current skills** required for your level and domain
-3. **Self-assess** your proficiency level for each skill
-4. **Track progress** over time with visual indicators
-5. **Review level requirements** to understand advancement criteria
+1. **Sign in** with your Google account
+2. **View your current skills** and proficiency levels as assessed by your team leader
+3. **Track your progress** toward the next career level with real-time updates
+4. **Review level requirements** to understand what skills you need to develop
+5. **See automatic level progression** immediately when all requirements are met
+6. **View any skill waivers** granted by your team leader
 
 ### For Team Leaders
 
-1. **Access admin dashboard** with team leader permissions
-2. **Define team-specific skills** relevant to your technology stack
-3. **Configure skill requirements** for each career level
-4. **Monitor team progress** and identify skill gaps
-5. **Export reports** for performance reviews
+1. **Access team dashboard** with team leader permissions
+2. **Assess team members' skills** by updating their proficiency levels (monthly/quarterly)
+3. **Grant skill waivers** for individual team members when appropriate
+4. **Create and manage team-specific skills** using the unified skill management interface
+5. **Configure skill requirements** for each career level using the ladder configuration
+6. **Monitor team progress** and see immediate level progressions
+7. **Transfer leadership** to another team member if needed
 
-### For System Administrators
+### For Admins
 
 1. **Manage user roles** and team assignments
-2. **Define generic engineering skills** applicable to all roles
-3. **Set up domain-specific skills** for different specializations
-4. **Monitor system usage** and performance
-5. **Backup and maintain** data integrity
+2. **Create generic engineering skills** applicable to all roles using the unified skill management UI
+3. **Define domain-specific skills** for different specializations
+4. **Set up and manage predefined domains** for the organization
+5. **Monitor system usage** and maintain data integrity
+6. **Promote users** to team leader or admin roles
+7. **Handle skill deletion** with automatic cleanup of related assessments and waivers
 
-## Alternative Technology Considerations
+### Key Features
 
-### Database Alternatives
+#### Immediate Level Progression
 
-| Option          | Pros                                              | Cons                                   | Best For                                 |
-| --------------- | ------------------------------------------------- | -------------------------------------- | ---------------------------------------- |
-| **Firestore**   | Easy setup, real-time updates, generous free tier | Vendor lock-in, query limitations      | Small-medium teams, rapid prototyping    |
-| **Supabase**    | Open source, PostgreSQL, better querying          | More complex setup, smaller ecosystem  | Teams wanting PostgreSQL features        |
-| **PlanetScale** | Serverless MySQL, branching, better SQL           | More expensive, requires SQL knowledge | Teams with complex relational data needs |
+- Level advancement happens **instantly** when skill requirements are met
+- Powered by Firestore triggers for real-time updates
+- No manual approval process required
 
-### Authentication Alternatives
+#### Skill Waiver System
 
-| Option            | Pros                                            | Cons                          | Best For                         |
-| ----------------- | ----------------------------------------------- | ----------------------------- | -------------------------------- |
-| **Firebase Auth** | Easy integration, multiple providers            | Vendor lock-in                | Quick setup with Google services |
-| **Auth0**         | Enterprise features, extensive customization    | More expensive, complex setup | Large organizations              |
-| **NextAuth.js**   | Open source, flexible, good Next.js integration | More configuration required   | Teams wanting full control       |
+- Team leaders can waive specific skills for exceptional cases
+- Waivers include reason and timestamp for audit trail
+- Waived skills don't block level progression
+
+#### Unified Skill Management
+
+- Single interface for creating skills across all categories
+- Available to both admins and team leaders (with appropriate permissions)
+- Automatic cleanup when skills are deleted
+
+#### Flexible Assessment Schedule
+
+- Team leaders assess skills on their own schedule (typically monthly/quarterly)
+- Partial assessments supported - unassessed skills default to "None"
+- No restrictions on assessment frequency
 
 ## Contributing
 
@@ -1087,6 +1515,6 @@ npm run dev
 2. **Configure environment variables** with your Firebase credentials
 3. **Run the development server** and test basic functionality
 4. **Customize the skill definitions** for your organization
-5. **Deploy to production** using Vercel or Firebase Hosting
+5. **Deploy to production** using Vercel
 
 For questions or support, please open an issue in the repository or contact the development team.
