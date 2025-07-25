@@ -1,0 +1,108 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Users can create their own user document on first sign-in
+    // and read/update their own data (but not sensitive fields like role, teamId, currentLevel)
+    match /users/{userId} {
+      allow create: if request.auth != null && request.auth.uid == userId;
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow update: if request.auth != null && request.auth.uid == userId
+        && !('role' in request.resource.data.diff(resource.data))
+        && !('teamId' in request.resource.data.diff(resource.data))
+        && !('currentLevel' in request.resource.data.diff(resource.data));
+    }
+
+    // Team leaders can read their team members
+    match /users/{userId} {
+      allow read: if request.auth != null &&
+        exists(/databases/$(database)/documents/teams/$(resource.data.teamId)) &&
+        get(/databases/$(database)/documents/teams/$(resource.data.teamId)).data.leaderId == request.auth.uid;
+    }
+
+    // Admins can read and update all users
+    match /users/{userId} {
+      allow read, write: if request.auth != null &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // Teams - leaders can manage their own team, admins can manage all
+    match /teams/{teamId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && (
+        (resource == null || resource.data.leaderId == request.auth.uid) ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
+      );
+    }
+
+    // Skills - admins and team leaders can manage appropriate skills
+    match /skills/{skillId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && (
+          // Admins can manage all skills
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          // Team leaders can manage team-specific skills for their team
+          (request.resource.data.category == 'team' &&
+           exists(/databases/$(database)/documents/teams/$(request.resource.data.teamId)) &&
+           get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.leaderId == request.auth.uid)
+        );
+    }
+
+    // Assessments - team leaders can assess their team members
+    match /assessments/{assessmentId} {
+      allow read: if request.auth != null && (
+        // Users can read their own assessments
+        request.auth.uid == resource.data.userId ||
+        // Team leaders can read assessments for their team members
+        (exists(/databases/$(database)/documents/users/$(resource.data.userId)) &&
+         exists(/databases/$(database)/documents/teams/$(get(/databases/$(database)/documents/users/$(resource.data.userId)).data.teamId)) &&
+         get(/databases/$(database)/documents/teams/$(get(/databases/$(database)/documents/users/$(resource.data.userId)).data.teamId)).data.leaderId == request.auth.uid)
+      );
+
+      allow write: if request.auth != null &&
+        // Only team leaders can write assessments for their team members
+        exists(/databases/$(database)/documents/users/$(request.resource.data.userId)) &&
+        exists(/databases/$(database)/documents/teams/$(get(/databases/$(database)/documents/users/$(request.resource.data.userId)).data.teamId)) &&
+        get(/databases/$(database)/documents/teams/$(get(/databases/$(database)/documents/users/$(request.resource.data.userId)).data.teamId)).data.leaderId == request.auth.uid;
+    }
+
+    // Skill Waivers - team leaders can waive skills for their team members
+    match /skillWaivers/{waiverId} {
+      allow read: if request.auth != null && (
+        // Users can read their own waivers
+        request.auth.uid == resource.data.userId ||
+        // Team leaders can read waivers for their team members
+        (exists(/databases/$(database)/documents/users/$(resource.data.userId)) &&
+         exists(/databases/$(database)/documents/teams/$(get(/databases/$(database)/documents/users/$(resource.data.userId)).data.teamId)) &&
+         get(/databases/$(database)/documents/teams/$(get(/databases/$(database)/documents/users/$(resource.data.userId)).data.teamId)).data.leaderId == request.auth.uid)
+      );
+
+      allow write: if request.auth != null &&
+        // Only team leaders can create/update waivers for their team members
+        exists(/databases/$(database)/documents/users/$(request.resource.data.userId)) &&
+        exists(/databases/$(database)/documents/teams/$(get(/databases/$(database)/documents/users/$(request.resource.data.userId)).data.teamId)) &&
+        get(/databases/$(database)/documents/teams/$(get(/databases/$(database)/documents/users/$(request.resource.data.userId)).data.teamId)).data.leaderId == request.auth.uid;
+    }
+
+    // Domains - read by all, write by admins only
+    match /domains/{domainId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // Ladder configurations - team leaders and admins
+    match /ladderConfigs/{configId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && (
+        (exists(/databases/$(database)/documents/teams/$(request.resource.data.teamId)) &&
+         get(/databases/$(database)/documents/teams/$(request.resource.data.teamId)).data.leaderId == request.auth.uid) ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
+      );
+    }
+  }
+} 
